@@ -129,12 +129,54 @@ impl AwsCredentials {
         })
     }
 
-    /// Resolve credentials: env vars first, then EC2 IMDS.
+    /// Resolve credentials: env vars first, then EKS Pod Identity / ECS container creds, then EC2 IMDS.
     async fn resolve() -> anyhow::Result<Self> {
         if let Ok(creds) = Self::from_env() {
             return Ok(creds);
         }
+        if let Ok(creds) = Self::from_container_credentials().await {
+            return Ok(creds);
+        }
         Self::from_imds().await
+    }
+
+    /// Fetch credentials from EKS Pod Identity / ECS container credential provider.
+    /// Reads AWS_CONTAINER_CREDENTIALS_FULL_URI + AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE.
+    async fn from_container_credentials() -> anyhow::Result<Self> {
+        let uri = std::env::var("AWS_CONTAINER_CREDENTIALS_FULL_URI")
+            .map_err(|_| anyhow::anyhow!("AWS_CONTAINER_CREDENTIALS_FULL_URI not set"))?;
+
+        let client = reqwest::Client::new();
+        let mut req = client.get(&uri);
+
+        // EKS Pod Identity uses a token file; ECS uses a plain token env var
+        if let Ok(token_file) = std::env::var("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE") {
+            let token = tokio::fs::read_to_string(&token_file).await
+                .map_err(|e| anyhow::anyhow!("read token file {token_file}: {e}"))?;
+            req = req.header("Authorization", token.trim());
+        } else if let Ok(token) = std::env::var("AWS_CONTAINER_AUTHORIZATION_TOKEN") {
+            req = req.header("Authorization", token);
+        }
+
+        let resp = req.send().await?.json::<serde_json::Value>().await?;
+
+        let access_key_id = resp.get("AccessKeyId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing AccessKeyId in container credentials response"))?
+            .to_string();
+        let secret_access_key = resp.get("SecretAccessKey")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing SecretAccessKey in container credentials response"))?
+            .to_string();
+        let session_token = resp.get("Token")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let region = std::env::var("AWS_REGION")
+            .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+            .unwrap_or_else(|_| "us-east-1".to_string());
+
+        Ok(Self { access_key_id, secret_access_key, session_token, region })
     }
 
     fn host(&self) -> String {
@@ -487,12 +529,12 @@ impl BedrockProvider {
         })
     }
 
-    /// Resolve credentials: use cached if available, otherwise fetch from IMDS.
+    /// Resolve credentials: use cached if available, otherwise fetch from container creds or IMDS.
     async fn resolve_credentials(&self) -> anyhow::Result<AwsCredentials> {
         if let Ok(creds) = AwsCredentials::from_env() {
             return Ok(creds);
         }
-        AwsCredentials::from_imds().await
+        AwsCredentials::resolve().await
     }
 
     // ── Cache heuristics (same thresholds as AnthropicProvider) ──
