@@ -33,7 +33,15 @@ save_state() {
 }
 
 # Trap SIGTERM (Kubernetes sends this before SIGKILL) and SIGINT
-trap 'save_state; exit 0' TERM INT
+cleanup() {
+    echo "[entrypoint] Signal received, shutting down..."
+    # Forward signal to zeroclaw so it can clean up
+    kill -TERM "$ZEROCLAW_PID" 2>/dev/null || true
+    wait "$ZEROCLAW_PID" 2>/dev/null || true
+    save_state
+    exit 0
+}
+trap cleanup TERM INT
 
 # Run zeroclaw in the background so the trap can fire
 zeroclaw daemon --config-dir /zeroclaw-data/.zeroclaw "$@" &
