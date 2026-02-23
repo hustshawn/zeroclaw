@@ -1,0 +1,58 @@
+default_provider = "bedrock"
+default_model = "global.anthropic.claude-sonnet-4-6"
+default_temperature = 0.7
+
+[runtime]
+kind = "native"
+
+[agent]
+max_tool_iterations = 10
+max_history_messages = 20
+
+[memory]
+backend = "sqlite"
+auto_save = true
+
+[channels_config]
+cli = false
+message_timeout_secs = 300
+
+# No telegram channel here — Router handles Telegram webhook and forwards to /webhook HTTP endpoint
+# ZeroClaw only runs as a gateway HTTP server in this mode
+
+[http_request]
+enabled = true
+allowed_domains = ["*"]
+max_response_size = 65536
+timeout_secs = 30
+
+[multimodal]
+max_images = 4
+max_image_size_mb = 5
+allow_remote_fetch = true
+
+[web_search]
+enabled = false
+
+[gateway]
+port = 3000
+host = "0.0.0.0"
+allow_public_bind = true
+require_pairing = false
+
+[reliability]
+provider_retries = 2
+provider_backoff_ms = 500
+
+[scheduler]
+enabled = false
+
+[heartbeat]
+enabled = false
+interval_minutes = 30
+
+[cron]
+enabled = false
+
+[identity]
+format = "openclaw"
